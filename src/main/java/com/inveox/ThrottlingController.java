@@ -1,29 +1,39 @@
 package com.inveox;
 
 import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalTime;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 public class ThrottlingController {
-
-    private final int ratePerSecond;
-    private int counterPerSecond = 0;
-    private long currentSecond;
-    private CurrentTime currentTime;
-
-    public ThrottlingController(int ratePerSecond, CurrentTime currentTime) {
-        this.ratePerSecond = ratePerSecond;
-        this.currentTime = currentTime;
+    
+    private final Clock clock;
+    private final Map<UUID, Window> machineWindowMap = new ConcurrentHashMap<>();
+    private final Supplier<Window> windowSupplier;
+    
+    
+    ThrottlingController(Clock clock, Supplier<Window> windowSupplier) {
+        this.clock = clock;
+        this.windowSupplier = windowSupplier;
     }
-
+    
+    ThrottlingController(Clock clock, int ratePerWindow, Duration windowSize) {
+        this(clock, () -> new Window(windowSize, ratePerWindow));
+    }
+    
+    public ThrottlingController(int ratePerWindow, Duration windowSize) {
+        this(new Clock(), ratePerWindow, windowSize);
+    }
+    
     /**
      * Whether next call should be throttled or not.
      * This method accepts machine payload and stores the current state of the processed calls.
      * If the call exceeds the available rate in the current second it is throttled (true is returned).
      * If the call is within the available rate in the current second false is returned. (ver.1)
-     *
+     * <p>
      * It is a matter of the implementation if limit should be reset every second or in provided time duration. (ver.2)
-     *
+     * <p>
      * Throttling can be based on the machine id available in the payload - not necessary in the basic implementation.
      * This is a matter of the implementation how requests are spread between machines. (ver.3)
      *
@@ -31,34 +41,8 @@ public class ThrottlingController {
      * @return whether call should be throttled (true) or not (false)
      */
     boolean shouldThrottle(MachinePayload payload) {
-    
-    
-        long epochSecond = Instant.now().getEpochSecond();
-        if (counterPerSecond > ratePerSecond && currentTime.isSameSecond(epochSecond))  {
-            return true;
-        }
+        Window window = machineWindowMap.computeIfAbsent(payload.getMachineId(), id -> windowSupplier.get());
         
-        counterPerSecond++;
-        
-        currentTime.set(epochSecond);
-
-        return false;
-    }
-    
-    public static class CurrentTime {
-        private long currentSecond;
-        
-        public CurrentTime() {
-            this.currentSecond = Instant.now().getEpochSecond();
-            
-        }
-        
-        public void set(long currentSecond) {
-            this.currentSecond = currentSecond;
-        }
-        
-        public boolean isSameSecond(long epochSecond) {
-            return currentSecond == epochSecond;
-        }
+        return !window.offer(clock.now());
     }
 }
